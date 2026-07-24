@@ -1,5 +1,6 @@
 import type { Config } from "tailwindcss";
 
+// Muted text on light cards: text-slate-600 minimum (WCAG AA 4.5:1 vs effective backdrop ~#FEFEFE). On bg-ink: white/70 minimum. Disabled controls: also hold 4.5:1 (QA tool requirement).
 const config: Config = {
   content: ["./app/**/*.{js,ts,jsx,tsx,mdx}", "./components/**/*.{js,ts,jsx,tsx,mdx}"],
   theme: {
