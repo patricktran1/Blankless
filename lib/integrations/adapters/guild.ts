@@ -1,21 +1,35 @@
 import { appointments } from "@/data/appointments";
 import type { IntegrationAdapter } from "@/lib/integrations/types";
 
+function getGuildTriggerUrl() {
+  return process.env.GUILD_API_TRIGGER_URL;
+}
+
+function getGuildBasicCredential() {
+  return process.env.GUILD_API_KEY;
+}
+
+function createBasicAuthorization(credential: string) {
+  return `Basic ${Buffer.from(credential, "utf8").toString("base64")}`;
+}
+
 export const guildAdapter: IntegrationAdapter = {
   name: "guild",
-  isEnabled: () => Boolean(process.env.GUILD_TRIGGER_WEBHOOK_URL),
+  isEnabled: () => Boolean(getGuildTriggerUrl() && getGuildBasicCredential()),
   async onWorkflowStart(ctx) {
-    const webhookUrl = process.env.GUILD_TRIGGER_WEBHOOK_URL;
-    if (!webhookUrl) return;
+    const triggerUrl = getGuildTriggerUrl();
+    const credential = getGuildBasicCredential();
+    if (!triggerUrl || !credential) return;
+
     const slot = appointments.find((appointment) => appointment.id === ctx.slotId);
     if (!slot) return;
 
-    // TODO(Guild): confirm whether a direct webhook Trigger requires an envelope,
-    // signature, or additional headers. The public triggers page did not expose
-    // a request schema, so this sends only the documented cancellation payload.
-    const response = await fetch(webhookUrl, {
+    const response = await fetch(triggerUrl, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: createBasicAuthorization(credential)
+      },
       body: JSON.stringify({
         slotId: slot.id,
         appointmentType: slot.appointmentType,
@@ -23,7 +37,8 @@ export const guildAdapter: IntegrationAdapter = {
         clinician: slot.clinician
       })
     });
-    if (!response.ok) throw new Error(`Guild trigger returned ${response.status}`);
+
+    if (!response.ok) throw new Error(`Guild API trigger returned ${response.status}`);
   },
   async onEvent() {},
   async onWorkflowEnd() {}
