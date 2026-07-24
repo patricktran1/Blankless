@@ -1,0 +1,51 @@
+name: Rehearse production demo
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "scripts/rehearse-production.mjs"
+      - ".github/workflows/rehearse-production.yml"
+
+jobs:
+  rehearse:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Playwright
+        run: |
+          npm install --no-save --no-package-lock playwright
+          npx playwright install --with-deps chromium
+
+      - name: Run five deterministic rehearsals
+        env:
+          BLANKLESS_URL: https://blankless.vercel.app
+        run: node scripts/rehearse-production.mjs
+
+      - name: Convert fallback recording to MP4
+        if: always()
+        run: |
+          if [ -f artifacts/video/blankless-perfect-run.webm ]; then
+            ffmpeg -y \
+              -i artifacts/video/blankless-perfect-run.webm \
+              -c:v libx264 \
+              -pix_fmt yuv420p \
+              -movflags +faststart \
+              artifacts/blankless-perfect-run.mp4
+          fi
+
+      - name: Upload rehearsal evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: blankless-production-rehearsal
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 14
