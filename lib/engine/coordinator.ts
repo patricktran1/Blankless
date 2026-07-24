@@ -7,8 +7,36 @@ import { scenario1, scenario2 } from "@/lib/scenarios";
 import { useDemoStore } from "@/lib/store";
 import type { Persona, Scenario, TimelineEvent } from "@/lib/types";
 
+const SIM_SPEED = 12;
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 let runToken = 0;
+
+interface SimClock {
+  startMs: number;
+  currentMs: number;
+}
+
+function parseSimTime(time: string) {
+  const [hours, minutes, seconds = 0] = time.split(":").map(Number);
+  return ((hours * 60 + minutes) * 60 + seconds) * 1000;
+}
+
+function formatSimTime(valueMs: number) {
+  const normalizedMs = ((valueMs % MS_PER_DAY) + MS_PER_DAY) % MS_PER_DAY;
+  const totalSeconds = Math.floor(normalizedMs / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  return [hours, minutes, seconds].map((value) => String(value).padStart(2, "0")).join(":");
+}
+
+function formatElapsed(elapsedMs: number) {
+  const totalSeconds = Math.floor(elapsedMs / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}m ${seconds}s`;
+}
 
 function event(persona: Persona, message: string, simTimestamp: string, severity: TimelineEvent["severity"] = "info"): TimelineEvent {
   return { id: `${Date.now()}-${Math.random().toString(16).slice(2)}`, persona, message, simTimestamp, severity };
@@ -24,7 +52,16 @@ function addEvent(next: TimelineEvent) {
   store.set({ timeline: [...store.timeline, next] });
 }
 
-async function guardedWait(ms: number, token: number) { await wait(ms); if (token !== runToken) throw new Error("RUN_CANCELLED"); }
+function addClockEvent(clock: SimClock, persona: Persona, message: string, severity: TimelineEvent["severity"] = "info") {
+  addEvent(event(persona, message, formatSimTime(clock.currentMs), severity));
+}
+
+async function guardedWait(ms: number, token: number, clock: SimClock) {
+  await wait(ms);
+  if (token !== runToken) throw new Error("RUN_CANCELLED");
+  clock.currentMs += ms * SIM_SPEED;
+  useDemoStore.getState().set({ simTime: formatSimTime(clock.currentMs) });
+}
 
 export async function playScenario(id: 1 | 2) {
   const initial = useDemoStore.getState();
@@ -34,32 +71,34 @@ export async function playScenario(id: 1 | 2) {
   const scenario: Scenario = id === 1 ? scenario1 : scenario2;
   const slot = initial.appointments.find((appointment) => appointment.id === scenario.slotId);
   if (!slot) return;
+  const startMs = parseSimTime(scenario.cancelAt);
+  const clock: SimClock = { startMs, currentMs: startMs };
 
   try {
-    initial.set({ running:true, activeScenario:id, activeSlotId:slot.id, state:"gap_detected", candidates:[], exclusions:[], comparison:null });
+    initial.set({ running:true, activeScenario:id, activeSlotId:slot.id, state:"gap_detected", candidates:[], exclusions:[], comparison:null, simTime:formatSimTime(clock.currentMs) });
     patchAppointment(slot.id, { status:"canceled" });
-    addEvent(event("Gap Scout", `Cancellation detected — ${slot.startTime} ${slot.appointmentType.replaceAll("-"," ")}, ${slot.clinician}, ${slot.duration} min. ${Math.floor(scenario.timeToSlotMinutes/60)}h ${scenario.timeToSlotMinutes%60}m until slot.`, scenario.cancelAt, "danger"));
-    await guardedWait(700, token);
+    addClockEvent(clock, "Gap Scout", `Cancellation detected — ${slot.startTime} ${slot.appointmentType.replaceAll("-"," ")}, ${slot.clinician}, ${slot.duration} min. ${Math.floor(scenario.timeToSlotMinutes/60)}h ${scenario.timeToSlotMinutes%60}m until slot.`, "danger");
+    await guardedWait(700, token, clock);
 
     useDemoStore.getState().set({ state:"matching" });
-    addEvent(event("Candidate Matcher", "Retrieved 8 waitlist patients and opened a recovery workflow.", scenario.cancelAt));
-    await guardedWait(650, token);
+    addClockEvent(clock, "Candidate Matcher", "Retrieved 8 waitlist patients and opened a recovery workflow.");
+    await guardedWait(650, token, clock);
 
     useDemoStore.getState().set({ state:"guarding" });
     const now = useDemoStore.getState();
     const bookedIds = now.patients.filter((p) => p.status === "booked").map((p) => p.id);
-    const guarded = guardCandidates(now.patients, slot, scenario.timeToSlotMinutes, bookedIds, id);
+    const guarded = guardCandidates(now.patients, slot, scenario.timeToSlotMinutes, bookedIds);
     now.set({ exclusions:guarded.exclusions });
     for (const exclusion of guarded.exclusions) {
-      addEvent(event("Policy Guard", `Blocked ${exclusion.patientName} — ${exclusion.rule}: ${exclusion.detail}`, scenario.cancelAt, "warning"));
-      await guardedWait(450, token);
+      addClockEvent(clock, "Policy Guard", `Blocked ${exclusion.patientName} — ${exclusion.rule}: ${exclusion.detail}`, "warning");
+      await guardedWait(450, token, clock);
     }
 
     const ranked = rankCandidates(guarded.eligible, slot, now.policy);
     useDemoStore.getState().set({ state:"ranked", candidates:ranked });
     patchAppointment(slot.id, { status:"recovering" });
-    addEvent(event("Candidate Matcher", `Ranked ${ranked.length} eligible patients under ${now.policy.id.replace("policy-", "Policy ").toUpperCase()}.`, scenario.cancelAt));
-    await guardedWait(900, token);
+    addClockEvent(clock, "Candidate Matcher", `Ranked ${ranked.length} eligible patients under ${now.policy.id.replace("policy-", "Policy ").toUpperCase()}.`);
+    await guardedWait(900, token, clock);
 
     let attemptsThisRun = 0;
     for (const response of scenario.responses) {
@@ -68,25 +107,25 @@ export async function playScenario(id: 1 | 2) {
       if (!candidate) continue;
       attemptsThisRun += 1;
       current.set({ state:"outreach_active", activeCandidateId:candidate.patient.id });
-      addEvent(event("Outreach Agent", `${candidate.patient.preferredChannel.toUpperCase()} sent to ${candidate.patient.name}: “A ${slot.startTime} appointment opened with ${slot.clinician}. Reply YES to claim it.”`, scenario.cancelAt));
-      await guardedWait(500, token);
+      addClockEvent(clock, "Outreach Agent", `${candidate.patient.preferredChannel.toUpperCase()} sent to ${candidate.patient.name}: “A ${slot.startTime} appointment opened with ${slot.clinician}. Reply YES to claim it.”`);
+      await guardedWait(500, token, clock);
       useDemoStore.getState().set({ state:"awaiting_response" });
-      await guardedWait(response.latencyMs, token);
+      await guardedWait(response.latencyMs, token, clock);
 
       if (response.result === "declined") {
-        addEvent(event("Outreach Agent", `${candidate.patient.name} declined — “${response.replyText}”`, scenario.cancelAt, "danger"));
+        addClockEvent(clock, "Outreach Agent", `${candidate.patient.name} declined — “${response.replyText}”`, "danger");
         useDemoStore.getState().set({ state:"declined" });
-        await guardedWait(600, token);
-        addEvent(event("Recovery Coordinator", `Advancing to candidate ${attemptsThisRun + 1} of ${ranked.length}.`, scenario.cancelAt));
+        await guardedWait(600, token, clock);
+        addClockEvent(clock, "Recovery Coordinator", `Advancing to candidate ${attemptsThisRun + 1} of ${ranked.length}.`);
         continue;
       }
 
       useDemoStore.getState().set({ state:"accepted" });
-      addEvent(event("Outreach Agent", `${candidate.patient.name} accepted — “${response.replyText}”`, scenario.cancelAt, "success"));
-      await guardedWait(500, token);
+      addClockEvent(clock, "Outreach Agent", `${candidate.patient.name} accepted — “${response.replyText}”`, "success");
+      await guardedWait(500, token, clock);
       useDemoStore.getState().set({ state:"confirming" });
-      addEvent(event("Policy Guard", `Final consent, double-book, and single-fill lock checks passed for ${candidate.patient.name}.`, scenario.cancelAt, "success"));
-      await guardedWait(550, token);
+      addClockEvent(clock, "Policy Guard", `Final consent, double-book, and single-fill lock checks passed for ${candidate.patient.name}.`, "success");
+      await guardedWait(550, token, clock);
 
       patchAppointment(slot.id, { status:"recovered", patientId:candidate.patient.id, patientName:candidate.patient.name });
       const after = useDemoStore.getState();
@@ -99,29 +138,30 @@ export async function playScenario(id: 1 | 2) {
           staffActionsAvoided: after.metrics.staffActionsAvoided + 7,
           recoveredMinutes: after.metrics.recoveredMinutes + slot.duration,
           revenue: after.metrics.revenue + 180,
-          fillTime: id === 1 ? "4m 12s" : "1m 56s"
+          fillTime: formatElapsed(clock.currentMs - clock.startMs)
         }
       });
-      addEvent(event("Recovery Coordinator", `Gap closed — ${candidate.patient.name} confirmed in ${attemptsThisRun} attempt${attemptsThisRun === 1 ? "" : "s"}.`, scenario.cancelAt, "success"));
+      addClockEvent(clock, "Recovery Coordinator", `Gap closed — ${candidate.patient.name} confirmed in ${attemptsThisRun} attempt${attemptsThisRun === 1 ? "" : "s"}.`, "success");
       break;
     }
 
     if (id === 1) {
-      await guardedWait(750, token);
+      await guardedWait(750, token, clock);
       const before = useDemoStore.getState().policy;
       const learned = learnFromAfternoonDecline(before);
       useDemoStore.getState().set({ state:"learning", previousPolicy:before, policy:learned });
-      addEvent(event("Learning Agent", "Policy v2 created — time-of-day preference increased from 5% to 11%.", scenario.cancelAt, "success"));
+      addClockEvent(clock, "Learning Agent", "Policy v2 created — time-of-day preference increased from 5% to 11%.", "success");
     } else {
       useDemoStore.getState().set({ comparison:"Policy v1 would have contacted Sofia first. Policy v2 filled this slot in 1 attempt." });
     }
 
-    await guardedWait(400, token);
+    await guardedWait(400, token, clock);
     useDemoStore.getState().set({ state:"idle", running:false, activeCandidateId:null });
   } catch (error) {
     if ((error as Error).message !== "RUN_CANCELLED") {
+      console.error(error);
       useDemoStore.getState().set({ state:"escalated", running:false });
-      addEvent(event("Recovery Coordinator", "Workflow paused and escalated for staff review.", scenario.cancelAt, "danger"));
+      addClockEvent(clock, "Recovery Coordinator", "Workflow paused and escalated for staff review.", "danger");
     }
   }
 }
