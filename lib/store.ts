@@ -19,6 +19,7 @@ interface DemoStore {
   activeScenario: 1 | 2 | null;
   activeSlotId: string | null;
   activeCandidateId: string | null;
+  simTime: string;
   metrics: Metrics;
   running: boolean;
   comparison: string | null;
@@ -29,7 +30,7 @@ interface DemoStore {
 const seedMetrics: Metrics = { recovered:0, attempts:0, staffActionsAvoided:0, recoveredMinutes:0, revenue:0, fillTime:"—" };
 export const useDemoStore = create<DemoStore>((set) => ({
   appointments: structuredClone(appointmentSeed), patients: structuredClone(patientSeed), policy: structuredClone(policyV1), previousPolicy:null,
-  timeline:[], candidates:[], exclusions:[], state:"idle", activeScenario:null, activeSlotId:null, activeCandidateId:null, metrics:seedMetrics, running:false, comparison:null,
+  timeline:[], candidates:[], exclusions:[], state:"idle", activeScenario:null, activeSlotId:null, activeCandidateId:null, simTime:"—", metrics:seedMetrics, running:false, comparison:null,
   set,
-  reset: () => set({ appointments:structuredClone(appointmentSeed), patients:structuredClone(patientSeed), policy:structuredClone(policyV1), previousPolicy:null, timeline:[], candidates:[], exclusions:[], state:"idle", activeScenario:null, activeSlotId:null, activeCandidateId:null, metrics:{...seedMetrics}, running:false, comparison:null })
+  reset: () => set({ appointments:structuredClone(appointmentSeed), patients:structuredClone(patientSeed), policy:structuredClone(policyV1), previousPolicy:null, timeline:[], candidates:[], exclusions:[], state:"idle", activeScenario:null, activeSlotId:null, activeCandidateId:null, simTime:"—", metrics:{...seedMetrics}, running:false, comparison:null })
 }));
