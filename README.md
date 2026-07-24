@@ -105,18 +105,37 @@ Completed workflows are encoded into a deterministic 32-dimensional feature vect
 
 ### Guild
 
-Guild runs the deterministic recovery decision as a hosted agent. Blankless invokes the agent through the Guild **API Trigger** when a recovery workflow starts. The trigger uses the full generated HTTP Basic credential, shown by Guild as `username:password`.
+Guild runs the deterministic recovery decision as a hosted agent. Blankless invokes it through an **API Trigger** when a recovery workflow starts.
 
-Set both server-side variables:
+Guild does not issue a unique trigger URL. API-triggered runs use the workspace sessions endpoint:
 
-```bash
-GUILD_API_TRIGGER_URL=https://app.guild.ai/<generated-trigger-path>
-GUILD_API_KEY=username:password
+```text
+POST https://app.guild.ai/api/workspaces/{owner_name}/{workspace_name}/sessions
 ```
 
-The adapter sends the cancellation payload directly as JSON and adds `Authorization: Basic <base64(username:password)>`. The adapter remains disabled unless both values are present, and failures are isolated from the demo FSM.
+Set these server-side variables:
 
-The Guild trigger URL and API credential are secrets. Do not prefix either variable with `NEXT_PUBLIC_`, paste them into client code, or commit them to the repository.
+```bash
+GUILD_OWNER_NAME=patrick
+GUILD_WORKSPACE_NAME=your-workspace-slug
+GUILD_API_KEY=api_key_id:api_key_secret
+```
+
+The adapter authenticates with HTTP Basic auth and sends Guild's required request envelope:
+
+```json
+{
+  "session_type": "api_trigger",
+  "agent_input": {
+    "slotId": "appt-014",
+    "appointmentType": "derm-follow-up",
+    "startTime": "14:30",
+    "clinician": "Dr. Rivera"
+  }
+}
+```
+
+The API key is the combined credential displayed by Guild. Keep it server-side, do not prefix it with `NEXT_PUBLIC_`, and do not commit it. The adapter remains disabled unless the owner slug, workspace slug, and API key are all present. Failures remain isolated from the demo FSM.
 
 ### Replay QA
 
