@@ -9,7 +9,8 @@ const keys = [
   "ACTIAN_GRPC_ADDR",
   "ACTIAN_REST_URL",
   "ACTIAN_ACCESS_TOKEN",
-  "GUILD_API_TRIGGER_URL",
+  "GUILD_OWNER_NAME",
+  "GUILD_WORKSPACE_NAME",
   "GUILD_API_KEY",
   "NEXT_PUBLIC_REPLAY_RUN_URL",
   "VERCEL"
@@ -45,9 +46,10 @@ describe("integration adapter safety", () => {
     await expect(dispatchToEnabledAdapters(serverAdapters, "workflowStart", { action:"workflowStart", ctx })).resolves.toBeUndefined();
   });
 
-  it("invokes the Guild API trigger with the generated HTTP Basic credential", async () => {
-    process.env.GUILD_API_TRIGGER_URL = "https://guild.example.test/triggers/run";
-    process.env.GUILD_API_KEY = "username:password";
+  it("invokes the Guild workspace sessions endpoint with the API trigger envelope", async () => {
+    process.env.GUILD_OWNER_NAME = "patrick";
+    process.env.GUILD_WORKSPACE_NAME = "blankless-demo";
+    process.env.GUILD_API_KEY = "api-key-id:api-key-secret";
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 202 });
     vi.stubGlobal("fetch", fetchMock);
 
@@ -56,14 +58,23 @@ describe("integration adapter safety", () => {
     await guild.onWorkflowStart(ctx);
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "https://guild.example.test/triggers/run",
-      expect.objectContaining({
+      "https://app.guild.ai/api/workspaces/patrick/blankless-demo/sessions",
+      {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Basic ${Buffer.from("username:password", "utf8").toString("base64")}`
-        }
-      })
+          Authorization: `Basic ${Buffer.from("api-key-id:api-key-secret", "utf8").toString("base64")}`
+        },
+        body: JSON.stringify({
+          session_type: "api_trigger",
+          agent_input: {
+            slotId: "appt-014",
+            appointmentType: "derm-follow-up",
+            startTime: "14:30",
+            clinician: "Dr. Rivera"
+          }
+        })
+      }
     );
   });
 });
