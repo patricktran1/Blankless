@@ -4,13 +4,16 @@ import { guardCandidates } from "@/lib/engine/guard";
 import { learnFromAfternoonDecline } from "@/lib/engine/learner";
 import { rankCandidates } from "@/lib/policy/scoring";
 import { scenario1, scenario2 } from "@/lib/scenarios";
+import { dispatchTimelineEvent, dispatchWorkflowEnd, dispatchWorkflowStart } from "@/lib/integrations";
 import { useDemoStore } from "@/lib/store";
+import type { WorkflowContext, WorkflowOutcome } from "@/lib/integrations/types";
 import type { Persona, Scenario, TimelineEvent } from "@/lib/types";
 
 const SIM_SPEED = 12;
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 let runToken = 0;
+let activeWorkflowContext: WorkflowContext | null = null;
 
 interface SimClock {
   startMs: number;
@@ -50,6 +53,7 @@ function patchAppointment(slotId: string, patch: Record<string, unknown>) {
 function addEvent(next: TimelineEvent) {
   const store = useDemoStore.getState();
   store.set({ timeline: [...store.timeline, next] });
+  if (activeWorkflowContext) dispatchTimelineEvent(next, activeWorkflowContext);
 }
 
 function addClockEvent(clock: SimClock, persona: Persona, message: string, severity: TimelineEvent["severity"] = "info") {
@@ -73,15 +77,21 @@ export async function playScenario(id: 1 | 2) {
   if (!slot) return;
   const startMs = parseSimTime(scenario.cancelAt);
   const clock: SimClock = { startMs, currentMs: startMs };
+  let attemptsThisRun = 0;
+  let finalCandidateId: string | null = null;
+  let fillTime = "—";
 
   try {
+    activeWorkflowContext = { scenarioId:id, slotId:slot.id, policyId:initial.policy.id, startedAt:formatSimTime(clock.currentMs) };
+    dispatchWorkflowStart(activeWorkflowContext);
     initial.set({ running:true, activeScenario:id, activeSlotId:slot.id, state:"gap_detected", candidates:[], exclusions:[], comparison:null, simTime:formatSimTime(clock.currentMs) });
     patchAppointment(slot.id, { status:"canceled" });
     addClockEvent(clock, "Gap Scout", `Cancellation detected — ${slot.startTime} ${slot.appointmentType.replaceAll("-"," ")}, ${slot.clinician}, ${slot.duration} min. ${Math.floor(scenario.timeToSlotMinutes/60)}h ${scenario.timeToSlotMinutes%60}m until slot.`, "danger");
     await guardedWait(700, token, clock);
 
     useDemoStore.getState().set({ state:"matching" });
-    addClockEvent(clock, "Candidate Matcher", "Retrieved 8 waitlist patients and opened a recovery workflow.");
+    const waitlistedCount = useDemoStore.getState().patients.filter((patient) => patient.status === "waitlisted").length;
+    addClockEvent(clock, "Candidate Matcher", `Retrieved ${waitlistedCount} waitlist patients and opened a recovery workflow.`);
     await guardedWait(650, token, clock);
 
     useDemoStore.getState().set({ state:"guarding" });
@@ -100,7 +110,6 @@ export async function playScenario(id: 1 | 2) {
     addClockEvent(clock, "Candidate Matcher", `Ranked ${ranked.length} eligible patients under ${now.policy.id.replace("policy-", "Policy ").toUpperCase()}.`);
     await guardedWait(900, token, clock);
 
-    let attemptsThisRun = 0;
     for (const response of scenario.responses) {
       const current = useDemoStore.getState();
       const candidate = ranked.find((entry) => entry.patient.id === response.patientId);
@@ -128,6 +137,8 @@ export async function playScenario(id: 1 | 2) {
       await guardedWait(550, token, clock);
 
       patchAppointment(slot.id, { status:"recovered", patientId:candidate.patient.id, patientName:candidate.patient.name });
+      finalCandidateId = candidate.patient.id;
+      fillTime = formatElapsed(clock.currentMs - clock.startMs);
       const after = useDemoStore.getState();
       after.set({
         state:"recovered",
@@ -138,10 +149,14 @@ export async function playScenario(id: 1 | 2) {
           staffActionsAvoided: after.metrics.staffActionsAvoided + 7,
           recoveredMinutes: after.metrics.recoveredMinutes + slot.duration,
           revenue: after.metrics.revenue + 180,
-          fillTime: formatElapsed(clock.currentMs - clock.startMs)
+          fillTime
         }
       });
       addClockEvent(clock, "Recovery Coordinator", `Gap closed — ${candidate.patient.name} confirmed in ${attemptsThisRun} attempt${attemptsThisRun === 1 ? "" : "s"}.`, "success");
+      if (activeWorkflowContext) {
+        const outcome: WorkflowOutcome = { recovered:true, attempts:attemptsThisRun, fillTime, finalCandidateId };
+        dispatchWorkflowEnd(outcome, activeWorkflowContext);
+      }
       break;
     }
 
@@ -157,13 +172,18 @@ export async function playScenario(id: 1 | 2) {
 
     await guardedWait(400, token, clock);
     useDemoStore.getState().set({ state:"idle", running:false, activeCandidateId:null });
+    activeWorkflowContext = null;
   } catch (error) {
     if ((error as Error).message !== "RUN_CANCELLED") {
       console.error(error);
       useDemoStore.getState().set({ state:"escalated", running:false });
       addClockEvent(clock, "Recovery Coordinator", "Workflow paused and escalated for staff review.", "danger");
+      if (activeWorkflowContext) {
+        dispatchWorkflowEnd({ recovered:false, attempts:attemptsThisRun, fillTime, finalCandidateId }, activeWorkflowContext);
+      }
+      activeWorkflowContext = null;
     }
   }
 }
 
-export function resetDemo() { runToken += 1; useDemoStore.getState().reset(); }
+export function resetDemo() { runToken += 1; activeWorkflowContext = null; useDemoStore.getState().reset(); }
