@@ -26,7 +26,7 @@ flowchart LR
   Dispatch --> Routes[Server-side API routes]
   Routes --> Band[Band]
   Routes --> Actian[Actian VectorAI DB]
-  Routes --> Guild[Guild Trigger]
+  Routes --> Guild[Guild API Trigger]
   Guard --> Audit[Timeline Audit Trail]
   Match --> Audit
   Outreach --> Audit
@@ -105,12 +105,18 @@ Completed workflows are encoded into a deterministic 32-dimensional feature vect
 
 ### Guild
 
-Guild does not document a REST API for wrapping this external Next.js FSM in a Guild session, so Blankless does not pretend one exists. The integration has two real parts:
+Guild runs the deterministic recovery decision as a hosted agent. Blankless invokes the agent through the Guild **API Trigger** when a recovery workflow starts. The trigger uses the full generated HTTP Basic credential, shown by Guild as `username:password`.
 
-1. `guild-agent/` is a self-contained Guild auto-managed state agent built with `@guildai/agents-sdk`. It accepts the cancellation payload, runs copied deterministic scoring logic, and emits a ranked recovery decision.
-2. The web adapter POSTs the cancellation payload to `GUILD_TRIGGER_WEBHOOK_URL` at workflow start. A triggered Guild run creates the Guild session log used as the external audit trail.
+Set both server-side variables:
 
-See `guild-agent/README.md` for the exact `guild auth`, `guild agent test`, and publish sequence. The public trigger request envelope could not be verified, so the adapter includes an explicit TODO at the request body rather than inventing headers or signature rules.
+```bash
+GUILD_API_TRIGGER_URL=https://app.guild.ai/<generated-trigger-path>
+GUILD_API_KEY=username:password
+```
+
+The adapter sends the cancellation payload directly as JSON and adds `Authorization: Basic <base64(username:password)>`. The adapter remains disabled unless both values are present, and failures are isolated from the demo FSM.
+
+The Guild trigger URL and API credential are secrets. Do not prefix either variable with `NEXT_PUBLIC_`, paste them into client code, or commit them to the repository.
 
 ### Replay QA
 
